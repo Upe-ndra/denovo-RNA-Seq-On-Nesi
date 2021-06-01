@@ -319,3 +319,4 @@ srun Trinity --CPU ${SLURM_CPUS_PER_TASK} --max_memory 20G \
 --SS_lib_type RF \
 --output trinity_out
 ```
+Upon completion of this job you will get Trinity.fasta as a final RNA-seq assembly in `trinity_out` folder.
