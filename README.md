@@ -178,5 +178,144 @@ sbatch multiqc.sl
 ```
 This will create a single `html` file which we can copy to our personal computer and view in web browser (as above).
 
+## 4.Rcorrector
+Rcorrector uses a k-mer based method to correct random sequencing errors in Illumina RNA-seq reads. It is used on the sequencing data where the read coverage is non-uniform.
+Please read about [Rcorrector](https://academic.oup.com/gigascience/article/4/1/s13742-015-0089-y/2707778) before applying it on new data.
+To run Rcorrector on our trimmomatic processed data, lets go to paired folder
+```
+cd /nesi/nobackup/uoo002752/RNA-seq/paired/
+```
+```
+nano rcorrector.sl
+```
+copy, paste and save the below script to run rcorrector. This runs in a loop and for this we have to create a text file `names` same as the one for trimmomatic (see above)
+```
+#!/bin/bash -e
 
+#SBATCH --job-name=rcorrector
+#SBATCH --account=uoo02752
+#SBATCH --nodes 1 
+#SBATCH --cpus-per-task 1 
+#SBATCH --ntasks 10
+#SBATCH --mem=50G
+#SBATCH --partition=bigmem,large
+#SBATCH --time=48:00:00
+#SBATCH --output=%x.%j.out
+#SBATCH --error=%x.%j.err
+#SBATCH --mail-type=All
+#SBATCH --mail-user=bhaup057@student.otago.ac.nz
+#SBATCH --hint=nomultithread
 
+module load Rcorrector
+module load Jellyfish
+for f in $(<names)
+do
+run_rcorrector.pl -t 10 -p “{f}_R1_001_trim.fastq.gz” “${f}_R2_001_trim.fastq.gz” -od ./rcorrector -verbose
+done
+```
+Now we will find our filtered (trimmomatic) and corrected (rcorrector) data files in a folder `rcorrector`.
+We can now assemble this data using trinity.
+We usually perform trinity in two phases in Nesi to make the process more efficient in the cluster in terms of resource usage. 
+To run trinity we first need to create a configuration file `SLUM.conf`
+Let's change our directory to rcorrector
+```
+cd rcorrector
+```
+```
+nano SLUM.conf
+```
+Copy, paste, edit (eg, account) and save `ctrl+o` the following script
+```
+[GRID]
+# grid type:
+gridtype=SLURM
+# template for a grid submission
+# make sure:
+# --partition is chosen appropriately for the resource requirement
+# (here we choose either large or bigmem, whichever is available first)
+# --ntasks and --cpius-per-task should always be 1
+# --mem may need to be adjusted
+# --time may need to adjusted
+# (must be enough time for a batch of commands to finish)
+# --account should be your NeSI project code
+# add other sbatch options as required
+cmd=sbatch --partition=large,bigmem --mem=5G --ntasks=1 --cpus-per-task=1 --time=10:00:00 --
+account=uoo02752
+#note -e error.file -o out.file are set internally, so dont set them in the above cmd.
+####################################################################################
+# settings below configure the Trinity job submission system, not tied to the grid itself.
+####################################################################################
+# number of grid submissions to be maintained at steady state by the Trinity submission system
+max_nodes=100
+# number of commands that are batched into a single grid submission job.
+cmds_per_node=100
+```
+Lets create a slurm script for trinity phase I
+```
+nano trinity_phase_1.sl
+```
+Copy, paste, edit (eg, account, file names, SS_lib_type and other trinity parameters) and save `ctrl+o` the following script and run it using `sbatch trinity_phase_1.sl`
+```
+#!/bin/bash -e
+#SBATCH --nodes 1
+#SBATCH --job-name=trinity-phase1
+#SBATCH --account=uoo02752
+#SBATCH --time=30:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=18
+#SBATCH --partition=bigmem
+#SBATCH --mem=220G
+#SBATCH --hint=nomultithread
+##SBATCH --output=%x.%j.out
+##SBATCH --error=%x.%j.err
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=bhaup057@student.otago.ac.nz
+
+# load a Trinity module
+#module load Trinity/2.11.0-gimkl-2020a
+module load Trinity/2.8.6-gimkl-2020a #above version of trinity didn’t work for one of my data, so I had to go with older version, I don't know why it didn't work.
+# run trinity, stop before phase 2
+srun Trinity --no_distributed_trinity_exec \
+--CPU ${SLURM_CPUS_PER_TASK} --max_memory 200G \
+--seqType fq \
+--left (comma separated list of R1 of paired end files here) \
+--right (comma separated list of R2 of paired end files here) \
+--include_supertranscripts \
+--min_contig_length 200 \
+--SS_lib_type RF \
+--output trinity_out
+```
+When the run is finished you can run trinity Phase II. using following script, save the following script as `trinity_phase_2.sl` and submit the job using `sbatch`
+```
+nano trinity_phase_2.sl
+```
+```
+#!/bin/bash -e
+#SBATCH --nodes 1
+#SBATCH --job-name=trinity-phase2
+#SBATCH --account=uoo02752
+#SBATCH --time=48:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --partition=bigmem
+#SBATCH --mem=20G
+#SBATCH --hint=nomultithread
+#SBATCH --output=%x.%j.out
+#SBATCH --error=%x.%j.err
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=bhaup057@student.otago.ac.nz
+
+# load a Trinity module
+#module load Trinity/2.11.0-gimkl-2020a
+module load Trinity/2.8.6-gimkl-2020a
+module load HpcGridRunner/20181005
+srun Trinity --CPU ${SLURM_CPUS_PER_TASK} --max_memory 20G \
+--grid_exec "hpc_cmds_GridRunner.pl --grid_conf ${SLURM_SUBMIT_DIR}/SLURM.conf -c" \
+--seqType fq \
+--left (comma separated list of R1 of paired end files here) \
+--right (comma separated list of R2 of paired end files here) \
+--include_supertranscripts \
+--min_contig_length 200 \
+--SS_lib_type RF \
+--output trinity_out
+```
