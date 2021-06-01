@@ -1,4 +1,4 @@
-# denovo-RNA-Seq-in-Nesi
+# denovo-RNA-Seq-on-Nesi
 This is a compilation of scripts I have used for denovo RNA-Seq assembly and annotation and getting count metrics for differential gene expression analysis in New Zealand eScience Infrastructure **(Nesi)**.
 
 Workflow follows the softwares listed below:
