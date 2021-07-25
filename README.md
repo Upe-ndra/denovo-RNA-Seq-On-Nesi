@@ -1,4 +1,4 @@
-# denovo-RNA-Seq-on-Nesi
+# denovo-RNA-Seq-from-raw-reads-to-assembly-to-count-matrix-and-annotation
 This is a compilation of scripts I have used for denovo RNA-Seq assembly and annotation and getting count metrics for differential gene expression analysis in New Zealand eScience Infrastructure **(Nesi)**.
 
 Workflow follows the softwares listed below:
@@ -383,4 +383,122 @@ module load Corset/1.09-GCC-9.2.0
 
 corset -g 1,1,2,2,2,3,3,4,4,4,4 -n AM1,AM2,BML1,BML2,BML3,BMS1,BMS2,DM1,DM2,DM3,DM4 -i salmon_eq_classes *_L00A.out/aux_info/eq_classes.txt
 ```
+## 8.Annotation
 
+### 8.1. Transdecoder 
+
+To annotate our denovo assembly `Trinity.fasta` we will first run transdecoder with the script below
+
+```
+#!/bin/bash -e
+#SBATCH --job-name=transdec.nem
+#SBATCH --account=uoo02752
+#SBATCH --time=60:00:00
+#SBATCH --ntasks=10
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=30G
+#SBATCH --partition=bigmem
+#SBATCH --error=%x.%j.err
+#SBATCH --output=%x.%j.out
+#SBATCH --hint=nomultithread
+#SBATCH --mail-user=bhaup057@student.otago.ac.nz
+#SBATCH --mail-type=ALL
+
+module load TransDecoder/5.5.0-GCC-9.2.0-Perl-5.30.1
+
+TransDecoder.LongOrfs -t path/to/Trinity.fasta
+```
+### 8.2 series of other programs to run to get the annotation, comments on the script below are quite explanatory. You have to run them one by one in order, not all at the same time. use comments `#` to stop scripts from running.
+
+```
+#!/bin/bash -e
+
+#SBATCH --job-name=Trinotate
+#SBATCH --account=uoo02752
+#SBATCH --nodes 1 
+#SBATCH --cpus-per-task 1 
+#SBATCH --ntasks 16
+#SBATCH --mem=50G
+##SBATCH --qos=debug
+##SBATCH --time=00:15:00
+#SBATCH --partition=bigmem,large
+#SBATCH --time=72:00:00
+#SBATCH --output=%x.%j.out
+#SBATCH --error=%x.%j.err
+#SBATCH --mail-type=All
+#SBATCH --mail-user=bhaup057@student.otago.ac.nz
+#SBATCH --hint=nomultithread
+
+
+# modules to be used
+module load Trinotate/3.2.1-GCC-9.2.0
+module load SQLite/3.31.1-GCCcore-9.2.0
+module load TransDecoder/5.5.0-GCC-9.2.0-Perl-5.30.1
+module load HMMER/3.3-GCC-9.2.0
+
+# run below scripts one by one
+# Download databases (Uniprot)
+wget https://data.broadinstitute.org/Trinity/Trinotate_v2.0_RESOURCES/uniprot_sprot.trinotate_v2.0.pep.gz
+
+# rename, uncompress and index
+mv uniprot_sprot.trinotate_v2.0.pep.gz uniprot_sprot.trinotate.pep.gz
+gunzip uniprot_sprot.trinotate.pep.gz
+
+#Install ncbi blast+ with wget following ncbi instruction and prepare the protein database for blast search by:
+/nesi/nobackup/uoo02752/bin/ncbi-blast-2.11.0+/bin/makeblastdb -in uniprot_sprot.pep -dbtype prot
+
+# Download databases (Pfam)
+wget https://data.broadinstitute.org/Trinity/Trinotate_v2.0_RESOURCES/Pfam-A.hmm.gz
+
+# gunzip and prepare for use with hmmscan
+gunzip Pfam-A.hmm.gz
+
+module load HMMER/3.3-GCC-9.2.0
+hmmpress Pfam-A.hmm
+
+# Download  and uncompress the Trinotate SQLite database
+wget "https://data.broadinstitute.org/Trinity/Trinotate_v2.0_RESOURCES/Trinotate.sprot_uniref90.20150131.boilerplate.sqlite.gz" -O Trinotate.sqlite.gz
+gunzip Trinotate.sqlite.gz
+
+##Run transdecoder with trinity.fasta that will produce long_orf.pep file containing longest ORF peptide candidates from trinity assembly to be used under
+module load TransDecoder/5.5.0-GCC-9.2.0-Perl-5.30.1
+TransDecoder.LongOrfs -t path/to/Trinity.fasta
+TransDecoder.Predict -t Trinity.fasta
+
+#Run blastx for your trinity.fasta
+/nesi/nobackup/uoo02752/bin/ncbi-blast-2.11.0+/bin/blastx -query Trinity.fasta -db uniprot_sprot.pep -num_threads 8 -max_target_seqs 1 -outfmt 6 -evalue 1e-3 > blastx.outfmt6
+
+#if you split your trinity.fasta using split_fasta.pl script you have to merge the above results with the script below. but not our case here
+cat blastx.vol.*.outfmt6 > blastx.outfmt6
+
+# now run blastp
+/nesi/nobackup/uoo02752/bin/ncbi-blast-2.11.0+/bin/blastp -query Trinity.fasta.transdecoder_dir/longest_orfs.pep -db uniprot_sprot.pep -num_threads 8 -max_target_seqs 1 -outfmt 6 -evalue 1e-3 > blastp.outfmt6
+
+#same as above, if you had split the transdecoder.pep you have to merge above output with cat as below, not our case
+cat blastp.vol.*.outfmt6 > blastp.outfmt6
+
+# now run hmmer against Pfam to identify protein domains
+hmmscan --cpu 16 --domtblout TrinotatePFAM.out ./Pfam-A.hmm Trinity.fasta.transdecoder.pep > pfam.log
+
+# There are other optional steps to run blast with Uniref90 database and others I have not done that.
+# Now combine our results and create annotation report # gene_transcript_map.txt used below should be created when you run Trinity assembly. so look in that out put folder for that file.
+module load Trinotate/3.2.1-GCC-9.2.0
+Trinotate Trinotate.sqlite init --gene_trans_map path/to/trinity/output/folder/gene_transcript_map.txt --transcript_fasta path/to/Trinity.fasta --transdecoder_pep Trinity.fasta.transdecoder.pep 
+
+# load blast results
+module load Trinotate/3.2.1-GCC-9.2.0
+Trinotate Trinotate.sqlite LOAD_swissprot_blastp blastp.outfmt6
+Trinotate Trinotate.sqlite LOAD_swissprot_blastx blastx.outfmt6
+
+# load Pfam results
+module load Trinotate/3.2.1-GCC-9.2.0
+Trinotate Trinotate.sqlite Trinotate.sqlite LOAD_pfam TrinotatePFAM.out
+
+# Load other results from Uniref90, signalP and rnammer if you have run them. I have not.
+
+# Now its time to create annotation report
+module load Trinotate/3.2.1-GCC-9.2.0
+Trinotate Trinotate.sqlite report -E 0.00001 > trinotate_annotation_report.xls
+
+# trinotate_annotation_report.xls will have all the ids and annotation report for further use.
+```
