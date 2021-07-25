@@ -213,6 +213,7 @@ do
 run_rcorrector.pl -t 10 -p “{f}_R1_001_trim.fastq.gz” “${f}_R2_001_trim.fastq.gz” -od ./rcorrector -verbose
 done
 ```
+## 5.Trinity
 Now we will find our filtered (trimmomatic) and corrected (rcorrector) data files in a folder `rcorrector`.
 We can now assemble this data using trinity.
 We usually perform trinity in two phases in Nesi to make the process more efficient in the cluster in terms of resource usage. 
@@ -320,3 +321,66 @@ srun Trinity --CPU ${SLURM_CPUS_PER_TASK} --max_memory 20G \
 --output trinity_out
 ```
 Upon completion of this job you will get Trinity.fasta as a final RNA-seq assembly in `trinity_out` folder.
+
+## 6. Salmon to get count metrix
+After denovo assembly we can use salmon to get the count metrics for genes and or trascripts and cluster them with corset.
+Salmon first indexes the assembly and quantifies each pairdend files individually, we will be using for loop for it to go through all the samples
+below is the script:
+
+```
+#!/bin/bash -e
+
+##SBATCH --job-name=salmon
+#SBATCH --account=uoo02752
+#SBATCH --nodes 1 
+#SBATCH --cpus-per-task 1 
+#SBATCH --ntasks 10
+#SBATCH --mem=50G
+#SBATCH --partition=bigmem
+#SBATCH --time=12:00:00
+#SBATCH --output=%x.%j.out
+#SBATCH --error=%x.%j.err
+#SBATCH --mail-type=All
+#SBATCH --mail-user=bhaup057@student.otago.ac.nz
+#SBATCH --hint=nomultithread
+
+#module load Salmon/1.3.0-gimkl-2020a
+
+salmon index -t path/to/Trinity.fasta -i RNA_index
+
+FILES=`ls *_L00A_R1_001_trim.fastq.gz | sed 's/_R1_001_trim.fastq.gz//g'`
+for F in $FILES ; do
+    R1=${F}_R1_001_trim.fastq.gz
+    R2=${F}_R2_001_trim.fastq.gz
+    salmon quant --threads 10 --gcBias --index 
+RNA_index --libType A --dumpEq --hardFilter --skipQuant -1 $R1 -2 $R2 --output ${F}.out
+done
+```
+## 7. corset
+We now will use corset to cluster the genes/transcripts we can do so using script below.
+This will give you a count matrix which you can use with DESeq2 or edgeR or other softwares in R to do differential gene expression analysis.
+-g and -n flag above should be according your sample composition different numbers in -g represents different groups of samples to compare and -n are their corresponding names above I have four groups to compare group 1 has two samples AM1 and AM2 and like wise.
+
+```
+#!/bin/bash -e
+
+##SBATCH --job-name=corset
+#SBATCH --account=uoo02752
+#SBATCH --nodes 1 
+#SBATCH --cpus-per-task 1 
+#SBATCH --ntasks 10
+#SBATCH --mem=50G
+#SBATCH --partition=bigmem
+#SBATCH --time=12:00:00
+#SBATCH --output=%x.%j.out
+#SBATCH --error=%x.%j.err
+#SBATCH --mail-type=All
+#SBATCH --mail-user=bhaup057@student.otago.ac.nz
+#SBATCH --hint=nomultithread
+
+
+module load Corset/1.09-GCC-9.2.0
+
+corset -g 1,1,2,2,2,3,3,4,4,4,4 -n AM1,AM2,BML1,BML2,BML3,BMS1,BMS2,DM1,DM2,DM3,DM4 -i salmon_eq_classes *_L00A.out/aux_info/eq_classes.txt
+```
+
