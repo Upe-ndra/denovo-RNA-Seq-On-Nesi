@@ -81,7 +81,14 @@ EW459-W1-M_S20_L002
 EW459-W1-M_S20_L002
 EW460-W1-M_S21_L001
 ```
-
+you can use this simple scritp to get the names
+```
+ls *.fastq.gz | cut -d _ -f 1-3 | sort > names
+```
+or just for unique names
+```
+ls *.fastq.gz | cut -d _ -f 1-3 | sort |uniq > names
+```
 ### Lets make slurm job script for trimmomatic now.
 ```
 nano trimmomatic.sl
